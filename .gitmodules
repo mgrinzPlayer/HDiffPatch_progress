@@ -1,0 +1,18 @@
+[submodule "HDiffPatch"]
+	path = HDiffPatch
+	url = https://github.com/sisong/HDiffPatch
+[submodule "bzip2"]
+	path = bzip2
+	url = https://github.com/sisong/bzip2
+[submodule "libmd5"]
+	path = libmd5
+	url = https://github.com/sisong/libmd5
+[submodule "lzma"]
+	path = lzma
+	url = https://github.com/sisong/lzma
+[submodule "zlib"]
+	path = zlib
+	url = https://github.com/sisong/zlib
+[submodule "zstd"]
+	path = zstd
+	url = https://github.com/sisong/zstd

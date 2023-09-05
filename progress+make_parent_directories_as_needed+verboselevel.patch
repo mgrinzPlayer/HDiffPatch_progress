@@ -1,0 +1,261 @@
+diff -Nuri a/HDiffPatch/file_for_patch.c b/HDiffPatch/file_for_patch.c
+--- a/HDiffPatch/file_for_patch.c
++++ b/HDiffPatch/file_for_patch.c
+@@ -405,7 +405,50 @@
+     assert(out_fileHandle!=0);
+     if (out_fileHandle==0) { _set_errno_new(EINVAL); return hpatch_FALSE; }
+     file=_import_fileOpenByMode(fileName_utf8,_kFileWriteMode);
+-    if (file==0) return hpatch_FALSE;
++
++    if (file==0){ //try again
++      char begin[hpatch_kPathMaxSize];
++      size_t len=strlen(fileName_utf8);
++      char *i,*j,*start;
++      char *end=begin+len-1;
++      memcpy(begin,fileName_utf8,len);
++      begin[len]='\0';
++      start=begin;
++
++      while (i=strchr(begin,'\\')) *i='/';
++      i=strrchr(begin,'/');
++      if (i==0) return hpatch_FALSE;
++
++      // UNC cases (e.g. //hostname/sharedfolder1/dir1 )
++      if ((len>2)&&(begin[0]=='/')&&(begin[1]=='/')){
++        if ((i=strchr(begin+2,'/'))==0) return hpatch_FALSE;//UNC with hostname only
++        if ((i-begin)!=2){
++          // now 'i' points to '/' just after 'hostname'
++          // 'i' must point to '/' just before 'dir1'
++          while ((i[0]=='/')&&(i!=end)) ++i;// deal with things like this one: '//hostname////////sharedfolder1/dir1'
++          while ((i[0]!='/')&&(i!=end)) ++i;
++          start=i;
++        }
++      }
++
++      hpatch_TPathType type;
++      for (i=start; i!=end; ){
++        if ((j=strchr(i,'/'))==0) break;
++        if (i==j) {++i; continue;}
++        i=j;
++        if (i!=end) ++i;
++        if (*(j-1)==':') continue;
++
++        *j=0;
++        if (!_hpatch_getPathStat_noEndDirSeparator(begin,&type,0,0)) return hpatch_FALSE;
++        if (type==kPathType_notExist)
++          if (hpatch_makeNewDir(begin)==hpatch_FALSE) return hpatch_FALSE;
++        *j='/';
++      }
++      file=_import_fileOpenByMode(fileName_utf8,_kFileWriteMode);
++      if (file==0) return hpatch_FALSE;
++    }
++
+     *out_fileHandle=file;
+     return hpatch_TRUE;
+ }
+diff -Nuri a/HDiffPatch/hpatchz.c b/HDiffPatch/hpatchz.c
+--- a/HDiffPatch/hpatchz.c
++++ b/HDiffPatch/hpatchz.c
+@@ -31,6 +31,7 @@
+ #include <string.h>
+ #include <stdlib.h>
+ #include <stdio.h>  //fprintf
++// #include "libHDiffPatch/HPatch/progress.h"
+ #include "libHDiffPatch/HPatch/patch.h"
+ #include "_clock_for_demo.h"
+ #include "_atosize.h"
+@@ -136,9 +137,11 @@
+            "      output usage info.\n");
+ }
+ 
++int verboseLevel=3;
++
+ static void printUsage(){
+     printVersion();
+-    printf("\n");
++    printf("modification by mgrinzPlayer\n\n");
+     printf("patch usage: hpatchz [options] oldPath diffFile outNewPath\n"
+ #if (_IS_NEED_SFX)
+            "create  SFX: hpatchz [-X-exe#selfExecuteFile] diffFile -X#outSelfExtractArchive\n"
+@@ -230,6 +233,11 @@
+            "          needless existing files in directory.\n"
+ #endif
+            "  -v  output Version info.\n"
++           "Modification new options:\n"
++           "  -v-level  verbose level. 0=none 1=patchOK 2=+time 3=all\n"
++           "  -p[-type]  enable show progress. type 1=print 2=title 3=both(default);\n"
++           "               checks HDIFFPATCH_PRINT and HDIFFPATCH_TITLE environment variables;\n"
++           "               by default it uses this sprintf \"Progress %%.3f%%%%\" string.\n"
+            );
+     printHelpInfo();
+     printf("\n");
+@@ -396,6 +404,8 @@
+     hpatch_BOOL isOutputHelp=_kNULL_VALUE;
+     hpatch_BOOL isOutputVersion=_kNULL_VALUE;
+     hpatch_BOOL isOldPathInputEmpty=_kNULL_VALUE;
++    hpatch_BOOL isShowProgress=_kNULL_VALUE;
++    setvbuf(stdout, NULL, _IONBF, 0);
+ #if (_IS_NEED_SFX)
+     hpatch_BOOL isRunSFX=_kNULL_VALUE;
+     const char* out_SFX=0;
+@@ -501,8 +511,23 @@
+                 isOutputHelp=hpatch_TRUE;
+             } break;
+             case 'v':{
+-                _options_check((isOutputVersion==_kNULL_VALUE)&&(op[2]=='\0'),"-v");
+-                isOutputVersion=hpatch_TRUE;
++                _options_check((isOutputVersion==_kNULL_VALUE)&&((op[2]=='-')||(op[2]=='\0')),"-v");
++                if (op[2]=='\0')
++                  isOutputVersion=hpatch_TRUE;
++                else{ //mgrinzplayer
++                  _options_check((strlen(op)==4)&&(op[3]>='0')&&(op[3]<='3'),"-v-?");
++                  verboseLevel=op[3]-'0';
++                }
++            } break;
++            case 'p':{
++                _options_check((isShowProgress==_kNULL_VALUE)&&((op[2]=='-')||(op[2]=='\0')),"-p");
++                isShowProgress=hpatch_TRUE;
++                size_t type=3;
++                if (op[2]=='-'){
++                  _options_check(strlen(op)==4&&(op[3]>'0')&&(op[3]<'4'),"-p-?");
++                  type=op[3]-'0';
++                }
++                setShowProgress(getenv("HDIFFPATCH_PRINT"),getenv("HDIFFPATCH_TITLE"),type);
+             } break;
+             default: {
+                 _options_check(hpatch_FALSE,"-?");
+@@ -823,6 +848,7 @@
+         if ((0==decompressPlugin)||(decompressPlugin->open==0)) return hpatch_FALSE; //error
+     }
+     if (strlen(diffInfo->compressType)>0)
++      if (verboseLevel>2)
+         printf("hpatchz run with decompress plugin: \"%s\" (need decompress %d)\n",
+                diffInfo->compressType,diffInfo->compressedCount);
+     if (decompressPlugin){
+@@ -941,10 +967,12 @@
+     hpatch_TFileStreamInput_init(&diffData);
+     hpatch_TFileStreamOutput_init(&newData);
+     {//open
++        if (verboseLevel>2){
+         printf(    "old : \""); if (oldFileName) hpatch_printPath_utf8(oldFileName);
+         printf("\"\ndiff: \""); hpatch_printPath_utf8(diffFileName);
+         printf("\"\nout : \""); hpatch_printPath_utf8(outNewFileName);
+         printf("\"\n");
++        }
+         if ((0==oldFileName)||(0==strlen(oldFileName))){
+             mem_as_hStreamInput(&oldData.base,0,0);
+         }else{
+@@ -1029,6 +1057,7 @@
+     if (isVcDiff)
+         hpatch_TFileStreamOutput_setRandomOut(&newData,hpatch_TRUE);
+ #endif
++    if (verboseLevel>2)
+     printf("oldDataSize : %" PRIu64 "\ndiffDataSize: %" PRIu64 "\nnewDataSize : %" PRIu64 "\n",
+             poldData->streamSize,diffData.base.streamSize,newData.base.streamSize);
+     {
+@@ -1089,7 +1118,7 @@
+                newData.out_length,newData.base.streamSize);
+         check_on_error(HPATCH_FILEDATA_ERROR);
+     }
+-    printf("  patch ok!\n");
++    if (verboseLevel>0) printf("  patch ok!\n");
+     
+ clear:
+     _isInClear=hpatch_TRUE;
+@@ -1097,7 +1126,7 @@
+     check(hpatch_TFileStreamInput_close(&diffData),HPATCH_FILECLOSE_ERROR,"diffFile close");
+     check(hpatch_TFileStreamInput_close(&oldData),HPATCH_FILECLOSE_ERROR,"oldFile close");
+     _free_mem(temp_cache);
+-    printf("\nhpatchz time: %.3f s\n",(clock_s()-time0));
++    if (verboseLevel>1) printf("hpatchz time: %.3f s\n",(clock_s()-time0));
+     return result;
+ }
+ 
+diff -Nuri a/HDiffPatch/libHDiffPatch/HPatch/patch.c b/HDiffPatch/libHDiffPatch/HPatch/patch.c
+--- a/HDiffPatch/libHDiffPatch/HPatch/patch.c
++++ b/HDiffPatch/libHDiffPatch/HPatch/patch.c
+@@ -26,6 +26,8 @@
+  OTHER DEALINGS IN THE SOFTWARE.
+ */
+ #include "patch.h"
++#include "progress.h"
++#include "../../_clock_for_demo.h"
+ #if (_IS_NEED_CACHE_OLD_BY_COVERS)
+ #   include <stdlib.h> //qsort
+ #endif
+@@ -989,7 +991,20 @@
+     hpatch_StreamPos_t newPosBack=0;
+     assert(cache_size>=hpatch_kMaxPackedUIntBytes);
+     
++    double time0=clock_s();
++    double now=0;
++    char titleBuf[1024];
++    int showProgress=getShowProgress();
++
+     while (coverCount--){
++
++        now=clock_s();
++        if (showProgress && (now-time0>0.2)){
++          time0=now;
++          printProgress(newPosBack,newDataSize,titleBuf);
++          if (showProgress>=2) SetConsoleTitle(titleBuf);
++        }
++
+         hpatch_TCover cover;
+         if(!covers->read_cover(covers,&cover)) return _hpatch_FALSE;
+ #ifdef __RUN_MEM_SAFE_CHECK
+@@ -1014,6 +1029,13 @@
+         if (!_rle_decode_skip(rle_loader,copyLength)) return _hpatch_FALSE;
+         newPosBack=newDataSize;
+     }
++
++    if (showProgress){
++      printProgress(1,1,titleBuf);
++      if (showProgress>=2) SetConsoleTitle(titleBuf);
++      if (showProgress!=2) clearProgressLine();
++    }
++
+     if (!_TOutStreamCache_flush(outCache))
+         return _hpatch_FALSE;
+     if (   _TBytesRle_load_stream_isFinish(rle_loader)
+diff -Nuri a/HDiffPatch/libHDiffPatch/HPatch/progress.h b/HDiffPatch/libHDiffPatch/HPatch/progress.h
+--- a/HDiffPatch/libHDiffPatch/HPatch/progress.h
++++ b/HDiffPatch/libHDiffPatch/HPatch/progress.h
+@@ -0,0 +1,37 @@
++//mgrinz progress.h
++#ifndef HPatch_progress_h
++#define HPatch_progress_h
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
++
++char* progress_print="\rProgress %.3f%%";
++char* progress_title="Progress %.3f%%";
++int showProgress=0;
++
++int  getShowProgress(){return showProgress;}
++
++void setShowProgress(char *HDIFFPATCH_PRINT, char *HDIFFPATCH_TITLE, int type){
++  showProgress=type;
++  char buffer[1024];
++  if ( HDIFFPATCH_PRINT!=NULL ) {sprintf(buffer,"\r%s",HDIFFPATCH_PRINT);progress_print=strdup(buffer);}
++  if ( HDIFFPATCH_TITLE!=NULL )  progress_title=HDIFFPATCH_TITLE;
++}
++
++int printProgress(unsigned long long pos, unsigned long long maximum, char* title){
++  double progress=(100.0*pos)/maximum;
++  if (showProgress!=2) printf(progress_print, progress);
++  sprintf(title,progress_title, progress);
++}
++
++int clearProgressLine(){
++  size_t L=snprintf(NULL,0,progress_print, 100.0) - 1;// minus 1 because there is one \r
++  char* buf = malloc(L + 1);
++  memset(buf,32,L);
++  buf[L]='\0';
++  printf("\r");
++  printf(buf);
++  printf("\r");
++  free(buf);
++}
++#endif

@@ -1,0 +1,85 @@
+name: Windows_MSYS2
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - '*mod-version-*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+
+    - uses: actions/checkout@v3
+      with:
+        submodules: true
+
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: MSYS
+        update: true
+        install: mingw-w64-i686-gcc mingw-w64-i686-make mingw-w64-x86_64-gcc mingw-w64-x86_64-make xz patch
+
+    - name: compress source files
+      shell: msys2 {0}
+      run: |
+        tar --ignore-failed-read -cJf sources.tar.xz bzip2 HDiffPatch libmd5 lzma zlib zstd
+
+    - name: patching makefile
+      shell: msys2 {0}
+      run: |
+        patch -p1 < Makefile.patch
+        patch -p1 < progress+make_parent_directories_as_needed+verboselevel.patch
+
+    - name: compile 32bit
+      shell: msys2 {0}
+      env:
+        MSYSTEM: MINGW32
+      run: |
+        cd HDiffPatch
+        mingw32-make -B -j ZLIB=1 BZIP2=1 STATIC_CPP=1 MINS=1
+        mv hdiffz.exe   hdiffz-i686.exe
+        mv hpatchz.exe hpatchz-i686.exe
+
+    - name: compile 64bit
+      shell: msys2 {0}
+      env:
+        MSYSTEM: MINGW64
+      run: |
+        cd HDiffPatch
+        mingw32-make -B -j ZLIB=1 BZIP2=1 STATIC_CPP=1 MINS=1
+        mv hdiffz.exe   hdiffz-x86_64.exe
+        mv hpatchz.exe hpatchz-x86_64.exe
+
+    - name: compressing binaries and compute hash
+      id: computedHash
+      shell: msys2 {0}
+      run: |
+        tar --ignore-failed-read -cJf binaries.tar.xz HDiffPatch/*.exe
+        sha1checksum=$(sha1sum binaries.tar.xz | cut -d' ' -f1)
+        echo $sha1checksum > binaries.tar.xz.$sha1checksum.SHA1
+        echo "sha1sumhash=$sha1checksum" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/upload-artifact@v3
+      with:
+        name: binaries
+        path: binaries.tar.xz
+
+    - uses: actions/upload-artifact@v3
+      with:
+        name: sources
+        path: sources.tar.xz
+
+    - uses: actions/upload-artifact@v3
+      with:
+        name: checksum-${{ steps.computedHash.outputs.sha1sumhash }}
+        path: binaries.tar.xz.*.SHA1
+
+    - uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: |
+          binaries.tar.xz
+          sources.tar.xz
+          binaries.tar.xz.*.SHA1

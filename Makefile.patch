@@ -1,0 +1,52 @@
+Index: Makefile
+===================================================================
+--- a/HDiffPatch/Makefile
++++ b/HDiffPatch/Makefile
+@@ -209,7 +209,8 @@
+     -D_IS_NEED_ALL_CompressPlugin=0 \
+     -D_IS_NEED_DEFAULT_CompressPlugin=0 \
+     -D_IS_NEED_ALL_ChecksumPlugin=0 \
+-    -D_IS_NEED_DEFAULT_ChecksumPlugin=0 
++    -D_IS_NEED_DEFAULT_ChecksumPlugin=0 \
++    -D_IS_USED_WIN32_UTF8_WAPI=1
+ ifeq ($(M32),0)
+ else
+   DEF_FLAGS += -m32
+@@ -296,7 +297,7 @@
+     -D_IS_USED_PTHREAD=1
+ endif
+ 
+-PATCH_LINK := 
++PATCH_LINK := -municode
+ ifeq ($(ZLIB),2)
+   PATCH_LINK += -lz			# link zlib
+ endif
+@@ -326,15 +327,16 @@
+ ifeq ($(STATIC_CPP),0)
+   DIFF_LINK += -lstdc++
+ else
+-  DIFF_LINK += -static-libstdc++
++  DIFF_LINK += -static-libstdc++ -static
+ endif
+ 
+ CFLAGS   += $(DEF_FLAGS) 
+-CXXFLAGS += $(DEF_FLAGS) -std=c++11
++CXXFLAGS += $(DEF_FLAGS)
+ 
+ .PHONY: all install clean
+ 
+-all: libhdiffpatch.a hpatchz hdiffz mostlyclean
++# all: libhdiffpatch.a hpatchz hdiffz mostlyclean
++all: libhdiffpatch.a hpatchz hdiffz
+ 
+ libhdiffpatch.a: $(HDIFF_OBJ)
+ 	$(AR) rcs $@ $^
+@@ -344,7 +346,7 @@
+ hdiffz: libhdiffpatch.a
+ 	$(CXX) hdiffz.cpp libhdiffpatch.a $(CXXFLAGS) $(DIFF_LINK) -o hdiffz
+ 
+-ifeq ($(OS),Windows_NT) # mingw?
++ifeq ($(OS),notWindows_NT) # mingw?
+   RM := del /Q /F
+   DEL_HDIFF_OBJ := $(subst /,\,$(HDIFF_OBJ))
+ else
